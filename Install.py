@@ -42,6 +42,13 @@ class Installer(QMainWindow):
         self.user_input = QLineEdit()
         self.layout.addWidget(self.user_input)
 
+        self.password_label = QLabel("Введите пароль:")
+        self.layout.addWidget(self.password_label)
+
+        self.password_input = QLineEdit()
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.layout.addWidget(self.password_input)
+
         self.install_button = QPushButton("Установить")
         self.install_button.clicked.connect(self.install)
         self.layout.addWidget(self.install_button)
@@ -50,11 +57,21 @@ class Installer(QMainWindow):
         subprocess.run(command, shell=True, check=True)
 
     def get_disks(self):
-        result = subprocess.run(['lsblk', '-d', '-n', '-o', 'NAME'], stdout=subprocess.PIPE)
-        disks = result.stdout.decode().split()
-        return disks
+        result = subprocess.run(['lsblk', '-d', '-n', '-o', 'NAME,SIZE'], stdout=subprocess.PIPE)
+        disks = result.stdout.decode().splitlines()
+        disk_info = []
+        for disk in disks:
+            name, size = disk.split()
+            if 'G' in size:
+                size_numeric = float(size.rstrip('G').replace(',', '.'))
+                size_gb = size_numeric
+                disk_info.append(f"{name} - {size_gb:.2f} ГБ")
+            else:
+                disk_info.append(f"{name} - {size} (Неизвестный формат)")
+        return disk_info
 
     def partition_disk(self, disk, scheme):
+        disk = disk.split()[0]
         if scheme == 'Автоматическая разметка (весь диск)':
             self.run_command(f"parted /dev/{disk} mklabel gpt")
             self.run_command(f"parted /dev/{disk} mkpart primary ext4 1MiB 100%")
@@ -92,9 +109,9 @@ class Installer(QMainWindow):
         self.run_command("arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB")
         self.run_command("arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg")
 
-    def create_user(self, username):
+    def create_user(self, username, password):
         self.run_command(f"arch-chroot /mnt useradd -m -G wheel -s /bin/bash {username}")
-        self.run_command(f"arch-chroot /mnt passwd {username}")
+        self.run_command(f"arch-chroot /mnt bash -c 'echo \"{username}:{password}\" | chpasswd'")
         self.run_command("arch-chroot /mnt sed -i 's/# %wheel ALL=(ALL) ALL/%wheel ALL=(ALL) ALL/' /etc/sudoers")
 
     def install_packages(self, packages):
@@ -115,14 +132,18 @@ class Installer(QMainWindow):
         partition_scheme = self.partition_combo.currentText()
         wm = self.wm_combo.currentText()
         username = self.user_input.text()
+        password = self.password_input.text()
 
         if not username:
             QMessageBox.critical(self, "Ошибка", "Имя пользователя не может быть пустым!")
             return
+        if not password:
+            QMessageBox.critical(self, "Ошибка", "Пароль не может быть пустым!")
+            return
 
         self.partition_disk(disk, partition_scheme)
         self.install_base_system()
-        self.create_user(username)
+        self.create_user(username, password)
 
         if wm == 'KDE Plasma':
             self.install_packages(['plasma', 'plasma-meta', 'sddm'])
@@ -144,3 +165,4 @@ if __name__ == "__main__":
     window = Installer()
     window.show()
     app.exec()
+
